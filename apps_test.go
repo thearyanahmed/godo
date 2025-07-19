@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -1243,4 +1244,430 @@ func TestApps_GetAppInstances(t *testing.T) {
 	assert.Equal(t, "job-name", appInstances[2].ComponentName)
 	assert.True(t, strings.HasPrefix(appInstances[2].InstanceName, "job-name-"))
 	assert.Equal(t, APPINSTANCECOMPONENTTYPE_Job, appInstances[2].ComponentType)
+}
+
+func TestApps_AppSpecChanges(t *testing.T) {
+	t.Run("no changes", func(t *testing.T) {
+		currentSpec := &AppSpec{
+			Name: "current-app",
+			Services: []*AppServiceSpec{
+				{
+					Name:            "service-1",
+					EnvironmentSlug: "python",
+					RunCommand:      "python app.py",
+					GitHub: &GitHubSourceSpec{
+						Repo:   "user/repo",
+						Branch: "main",
+					},
+				},
+			},
+		}
+
+		newSpec := &AppSpec{
+			Name: "current-app",
+			Services: []*AppServiceSpec{
+				{
+					Name:            "service-1",
+					EnvironmentSlug: "python",
+					RunCommand:      "python app.py",
+					GitHub: &GitHubSourceSpec{
+						Repo:   "user/repo",
+						Branch: "main",
+					},
+				},
+			},
+		}
+		changes := changes(currentSpec, newSpec)
+		assert.Empty(t, changes, "Expected no changes when specs are identical")
+	})
+
+	t.Run("name change", func(t *testing.T) {
+		currentSpec := &AppSpec{
+			Name: "current-app",
+			Services: []*AppServiceSpec{
+				{
+					Name:            "service-1",
+					EnvironmentSlug: "python",
+					RunCommand:      "python app.py",
+					GitHub: &GitHubSourceSpec{
+						Repo:   "user/repo",
+						Branch: "main",
+					},
+				},
+			},
+		}
+
+		newSpec := &AppSpec{
+			Name: "new-app-name",
+			Services: []*AppServiceSpec{
+				{
+					Name:            "service-1",
+					EnvironmentSlug: "python",
+					RunCommand:      "python app.py",
+					GitHub: &GitHubSourceSpec{
+						Repo:   "user/repo",
+						Branch: "main",
+					},
+				},
+			},
+		}
+		changes := changes(currentSpec, newSpec)
+		assert.Equal(t, "name changed to new-app-name", changes, "Expected name change to be detected")
+	})
+
+	t.Run("service change", func(t *testing.T) {
+		currentSpec := &AppSpec{
+			Name: "current-app",
+			Services: []*AppServiceSpec{
+				{
+					Name:            "service-1",
+					EnvironmentSlug: "python",
+					RunCommand:      "python app.py",
+					GitHub: &GitHubSourceSpec{
+						Repo:   "user/repo",
+						Branch: "main",
+					},
+				},
+			},
+		}
+
+		newSpec := &AppSpec{
+			Name: "current-app",
+			Services: []*AppServiceSpec{
+				{
+					Name:            "service-1",
+					EnvironmentSlug: "python",
+					RunCommand:      "python app.py",
+					GitHub: &GitHubSourceSpec{
+						Repo:   "user/repo",
+						Branch: "develop", // Changed branch
+					},
+				},
+			},
+		}
+		changes := changes(currentSpec, newSpec)
+		assert.Equal(t, "service-1 changed github from main to develop", changes, "Expected service change to be detected")
+	})
+
+	t.Run("service removal", func(t *testing.T) {
+
+		currentSpec := &AppSpec{
+			Name: "current-app",
+			Services: []*AppServiceSpec{
+				{
+					Name:            "service-1",
+					EnvironmentSlug: "python",
+					RunCommand:      "python app.py",
+					GitHub: &GitHubSourceSpec{
+						Repo:   "user/repo",
+						Branch: "main",
+					},
+				},
+			},
+		}
+
+		newSpec := &AppSpec{
+			Name:     "current-app",
+			Services: []*AppServiceSpec{}, // service-1 removed
+		}
+		changes := changes(currentSpec, newSpec)
+		assert.Contains(t, changes, "service-1 removed", "Expected service removal to be detected")
+	})
+
+	t.Run("name and service related changes", func(t *testing.T) {
+		currentSpec := &AppSpec{
+			Name: "current-app",
+			Services: []*AppServiceSpec{
+				{
+					Name:            "service-1",
+					EnvironmentSlug: "python",
+					RunCommand:      "python app.py",
+					GitHub: &GitHubSourceSpec{
+						Repo:   "user/repo",
+						Branch: "main",
+					},
+				},
+			},
+		}
+
+		newSpec := &AppSpec{
+			Name: "new-app-name",
+			Services: []*AppServiceSpec{
+				{
+					Name:            "service-1",
+					EnvironmentSlug: "nodejs",
+					RunCommand:      "echo 1; node app.js",
+					GitHub: &GitHubSourceSpec{
+						Repo:   "user/repo",
+						Branch: "develop", // Changed branch
+					},
+				},
+				{
+					Name:            "service-2", // New service added
+					EnvironmentSlug: "nodejs",
+					GitHub: &GitHubSourceSpec{
+						Repo:   "user/nodejsrepo",
+						Branch: "main",
+					},
+				},
+			},
+		}
+		changes := changes(currentSpec, newSpec)
+		assert.Equal(t, changes, "service-1 changed github from main to develop, other changes: run command, environment, service service-2 added, name changed to new-app-name")
+	})
+
+	t.Run("environment variable change", func(t *testing.T) {
+		currentSpec := &AppSpec{
+			Name: "current-app",
+			Services: []*AppServiceSpec{
+				{
+					Name:            "service-1",
+					EnvironmentSlug: "python",
+					RunCommand:      "python app.py",
+					GitHub: &GitHubSourceSpec{
+						Repo:   "user/repo",
+						Branch: "main",
+					},
+					Envs: []*AppVariableDefinition{
+						{Key: "ENV_VAR_1", Value: "value1"},
+					},
+				},
+			},
+		}
+
+		newSpec := &AppSpec{
+			Name: "current-app",
+			Services: []*AppServiceSpec{
+				{
+					Name:            "service-1",
+					EnvironmentSlug: "python",
+					RunCommand:      "python app.py",
+					GitHub: &GitHubSourceSpec{
+						Repo:   "user/repo",
+						Branch: "main",
+					},
+					Envs: []*AppVariableDefinition{
+						{Key: "ENV_VAR_1", Value: "new_value"}, // Changed value
+						{Key: "ENV_VAR_2", Value: "value2"},    // New variable added
+					},
+				},
+			},
+
+			Envs: []*AppVariableDefinition{
+				{Key: "ENV_VAR_1", Value: "new_value"}, // Changed value
+				{Key: "ENV_VAR_2", Value: "value2"},    // New variable added
+			},
+		}
+		changes := changes(currentSpec, newSpec)
+		assert.Equal(t, changes, "service-1 changed environment variable ENV_VAR_1 from value1 to new_value, service-1 added environment variable ENV_VAR_2 with value value2")
+	})
+}
+
+type AppSpecChange struct {
+	Type  string      // "service", "worker", "job", etc.
+	Name  string      // service/worker/job name, if applicable
+	Field string      // what changed (e.g., "GitHub.Branch")
+	From  interface{} // old value
+	To    interface{} // new value
+}
+
+func formatFieldName(s string) string {
+	switch s {
+	case "RunCommand":
+		return "run command"
+	case "EnvironmentSlug":
+		return "environment"
+	case "GitHub":
+		return "github"
+	case "Name":
+		return "name"
+	case "Region":
+		return "region"
+	default:
+		return strings.ToLower(s)
+	}
+}
+
+func compareNamedList[T any](typ string, aList, bList []*T, changes *[]AppSpecChange) {
+	// Create map from name to item for both lists
+	mapA := make(map[string]*T)
+	mapB := make(map[string]*T)
+
+	for _, a := range aList {
+		va := reflect.ValueOf(a).Elem()
+		name := ""
+		if f := va.FieldByName("Name"); f.IsValid() {
+			name = f.String()
+		}
+		if name != "" {
+			mapA[name] = a
+		}
+	}
+
+	for _, b := range bList {
+		vb := reflect.ValueOf(b).Elem()
+		name := ""
+		if f := vb.FieldByName("Name"); f.IsValid() {
+			name = f.String()
+		}
+		if name != "" {
+			mapB[name] = b
+		}
+	}
+
+	// Detect removals (in A but not in B)
+	for name, a := range mapA {
+		if _, found := mapB[name]; !found {
+			*changes = append(*changes, AppSpecChange{
+				Type:  typ,
+				Name:  name,
+				Field: "removed",
+				From:  a,
+				To:    nil,
+			})
+		}
+	}
+
+	// Detect additions (in B but not in A)
+	for name, b := range mapB {
+		if _, found := mapA[name]; !found {
+			*changes = append(*changes, AppSpecChange{
+				Type:  typ,
+				Name:  name,
+				Field: "added",
+				From:  nil,
+				To:    b,
+			})
+		}
+	}
+
+	// Compare common items by name
+	for name, a := range mapA {
+		if b, found := mapB[name]; found {
+			va := reflect.ValueOf(a).Elem()
+			vb := reflect.ValueOf(b).Elem()
+			for i := 0; i < va.NumField(); i++ {
+				field := va.Type().Field(i)
+				fieldA := va.Field(i).Interface()
+				fieldB := vb.Field(i).Interface()
+				if !reflect.DeepEqual(fieldA, fieldB) {
+					*changes = append(*changes, AppSpecChange{
+						Type:  typ,
+						Name:  name,
+						Field: field.Name,
+						From:  fieldA,
+						To:    fieldB,
+					})
+				}
+			}
+		}
+	}
+}
+
+func DiffAppSpecs(a, b *AppSpec) []AppSpecChange {
+	var changes []AppSpecChange
+
+	compareNamedList("service", a.Services, b.Services, &changes)
+	compareNamedList("worker", a.Workers, b.Workers, &changes)
+	compareNamedList("job", a.Jobs, b.Jobs, &changes)
+	compareNamedList("function", a.Functions, b.Functions, &changes)
+	compareNamedList("static_site", a.StaticSites, b.StaticSites, &changes)
+
+	// top-level simple fields
+	if a.Name != b.Name {
+		changes = append(changes, AppSpecChange{
+			Type:  "app",
+			Name:  a.Name,
+			Field: "Name",
+			From:  a.Name,
+			To:    b.Name,
+		})
+	}
+	if a.Region != b.Region {
+		changes = append(changes, AppSpecChange{
+			Type:  "app",
+			Name:  a.Name,
+			Field: "Region",
+			From:  a.Region,
+			To:    b.Region,
+		})
+	}
+	// You can add other top-level fields like DisableEdgeCache here
+
+	return changes
+}
+
+func FormatAppSpecChanges(changes []AppSpecChange) string {
+	serviceChanges := make(map[string]struct {
+		GitHubDiff string
+		Others     []string
+	})
+	var otherOut []string
+	var serviceOrder []string
+	seen := make(map[string]bool)
+
+	for _, c := range changes {
+		switch c.Field {
+		case "removed":
+			otherOut = append(otherOut, fmt.Sprintf("%s %s removed", c.Type, c.Name))
+			continue
+		case "added":
+			otherOut = append(otherOut, fmt.Sprintf("%s %s added", c.Type, c.Name))
+			continue
+		}
+
+		if c.Type == "app" {
+			otherOut = append(otherOut, fmt.Sprintf("%s changed to %v", formatFieldName(c.Field), c.To))
+			continue
+		}
+
+		// Track service order
+		if !seen[c.Name] {
+			serviceOrder = append(serviceOrder, c.Name)
+			seen[c.Name] = true
+		}
+
+		entry := serviceChanges[c.Name]
+
+		if c.Field == "GitHub" {
+			fromVal := reflect.ValueOf(c.From)
+			toVal := reflect.ValueOf(c.To)
+			if fromVal.Kind() == reflect.Ptr && toVal.Kind() == reflect.Ptr &&
+				!fromVal.IsNil() && !toVal.IsNil() {
+				fromBranch := fromVal.Elem().FieldByName("Branch")
+				toBranch := toVal.Elem().FieldByName("Branch")
+				if fromBranch.IsValid() && toBranch.IsValid() {
+					entry.GitHubDiff = fmt.Sprintf("changed github from %s to %s", fromBranch.String(), toBranch.String())
+					serviceChanges[c.Name] = entry
+					continue
+				}
+			}
+		}
+
+		entry.Others = append(entry.Others, formatFieldName(c.Field))
+		serviceChanges[c.Name] = entry
+	}
+
+	var out []string
+
+	for _, name := range serviceOrder {
+		entry := serviceChanges[name]
+		var parts []string
+		if entry.GitHubDiff != "" {
+			parts = append(parts, entry.GitHubDiff)
+		}
+		if len(entry.Others) > 0 {
+			parts = append(parts, "other changes: "+strings.Join(entry.Others, ", "))
+		}
+		out = append(out, fmt.Sprintf("%s %s", name, strings.Join(parts, ", ")))
+	}
+
+	out = append(out, otherOut...)
+	return strings.Join(out, ", ")
+}
+
+func changes(currentSpec, newSpec *AppSpec) string {
+	changes := DiffAppSpecs(currentSpec, newSpec)
+
+	return FormatAppSpecChanges(changes)
 }
